@@ -16,11 +16,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-public class KafkaWordCount {
+public class KafkaReceiverWordCount {
 
     public static void main(String[] args) {
         SparkConf sparkConf = new SparkConf()
-                .setAppName("KafkaWordCount")
+                .setAppName("KafkaReceiverWordCount")
                 .setMaster("local[2]");
 
 
