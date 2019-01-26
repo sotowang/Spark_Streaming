@@ -361,11 +361,48 @@ hadoop fs -mkdir /wordcount_checkpoint
 nc -l localhost -p 9999
 ```
 
+---
 
+### 案例: 基于transform的实时黑名单过滤  TransformBlacklist.java
 
+背景: 用户对我们网站上的广告可以进行占地,点击之后要进行时实的计费,点一次算一下钱,但对于某些帮助无良商家刷广告的人,那么我们有一个黑名单,只要黑名单中
+的用户点击广告,就过滤掉
 
+```java
+//将每个batch的RDD与黑名单RDD进行join操作,实时过滤
+JavaDStream<String> vaildAdsClickLogDStream = userAdsClickLogDStream.transform(new Function<JavaPairRDD<String, String>, JavaRDD<String>>() {
+    @Override
+    public JavaRDD<String> call(JavaPairRDD<String, String> userAdsClickLogRDD) throws Exception {
+        //左外连接,user不在黑名单中会被保存下来
+        JavaPairRDD<String, Tuple2<String, Optional<Boolean>>> joinedRDD = userAdsClickLogRDD.leftOuterJoin(blacklistRDD);
+        //连接之后使用filter算子
+        JavaPairRDD<String, Tuple2<String, Optional<Boolean>>> filteredRDD = joinedRDD.filter(new Function<Tuple2<String, Tuple2<String, Optional<Boolean>>>, Boolean>() {
+            @Override
+            public Boolean call(Tuple2<String, Tuple2<String, Optional<Boolean>>> tuple) throws Exception {
+                if (tuple._2._2.isPresent() && tuple._2._2.get()) {
+                    return false;
+                }
+                return true;
+            }
+        });
 
+        //此时filteredRDD为没有被黑名单用户点击的RDD,进行map操作转换为我们想要的格式
+        JavaRDD<String> validAdsClickLogRDD = filteredRDD.map(new Function<Tuple2<String, Tuple2<String, Optional<Boolean>>>, String>() {
+            @Override
+            public String call(Tuple2<String, Tuple2<String, Optional<Boolean>>> tuple) throws Exception {
+                return tuple._2._1;
+            }
+        });
+        return validAdsClickLogRDD;
+    }
+});
+```
 
+* 打开socket流
+
+```markdown
+nc -l localhost -p 9999
+```
 
 
 
