@@ -1,47 +1,26 @@
-# Spark Streaming 基础
+package com.soto;
 
-[北风网 Spark 2.0从入门到精通 (278讲)](https://www.bilibili.com/video/av19995678/?p=101&t=612
-)
+import org.apache.spark.SparkConf;
+import org.apache.spark.api.java.function.FlatMapFunction;
+import org.apache.spark.api.java.function.Function2;
+import org.apache.spark.api.java.function.PairFunction;
+import org.apache.spark.streaming.Durations;
+import org.apache.spark.streaming.api.java.JavaDStream;
+import org.apache.spark.streaming.api.java.JavaPairDStream;
+import org.apache.spark.streaming.api.java.JavaReceiverInputDStream;
+import org.apache.spark.streaming.api.java.JavaStreamingContext;
+import scala.Tuple2;
 
-实时数据源头--> 消息中间件(Kafka)
+import java.util.Arrays;
 
-SparkStreaming 是Spark Core的一种扩展
-
-工作原理:
-
-> 接收实时输入数据流,将数据拆分为多个batch,比如每收集1秒的数据封装为一个batch,然后将每个batch交给Spark的计算引擎进行处理,最后会形成一个结果数据流其中的数据也是由一个一个的batch组成的
-
-
-```markdown
-(Kafka,Flume,HDFS/S3,Kinesis,Twitter) ==> (Spark Streaming) ==> (HDFS, DataBase,Dashboards)
-```
-
-## Spark Streaming 与 Strom对比
-
-###  Spark Streaming
-
-* 准实时,秒级,吞吐量高,健壮性一般(checkpoint,WAL),不支持动态调整并行度,事务机制不够完善
-
-* 最大的优势是位于Spark生态技术栈中
-
-### Strom
-
-* 纯实时(来一条数据,处理一条数据),毫秒级,吞吐量低,健壮性强(Zookeeper,ACK),支持动态调整并行度,支持事务机制完善
-
-## Spark Streaming: 实时WordCount程序开发  WordCount.java
-
-*  linux下netcat安装
-
-> sudo apt-get install netcat
-
----
-
-```java
+/**
+ * 实时WordCount程序
+ */
 public class WordCount {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
         SparkConf sparkConf = new SparkConf()
                 .setAppName("WordCount")
-                .setMaster("local[2]");
+                .setMaster("local[3]");
 
 
         JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.seconds(1));
@@ -74,11 +53,8 @@ public class WordCount {
         });
 
         wordCounts.print();
-        try {
-            Thread.sleep(5000);
-        } catch (InterruptedException e) {
-            e.printStackTrace();
-        }
+
+        Thread.sleep(5000);
 
 
         //必须调用JavaSreamingContext.start() 整个SparkStreaming才会执行,否则不会执行
@@ -87,48 +63,3 @@ public class WordCount {
         jssc.close();
     }
 }
-```
-
-* nc启动
-
-> nc -l localhost -p 9999
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
