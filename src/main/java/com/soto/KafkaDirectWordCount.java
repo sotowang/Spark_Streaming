@@ -19,7 +19,7 @@ public class KafkaDirectWordCount {
 
     public static void main(String[] args) {
         SparkConf sparkConf = new SparkConf()
-                .setAppName("KafkaReceiverWordCount")
+                .setAppName("KafkaDirectWordCount")
                 .setMaster("local[2]");
 
 

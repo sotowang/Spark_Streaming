@@ -211,6 +211,23 @@ kafka-console-producer.sh --broker-list localhost:9092 --wordCount
 
 * 启动程序...
 
+注: zookeeper无法关闭问题
+
+1. 查找该端口号2181 进程
+
+```markdown
+netstat -anp|grep 2181
+```
+
+2. 杀死进程
+
+```markdown
+kill -9 PID
+```
+
+
+---
+
 ### 基于Direct方式实现Kafka数据源  KafkaDirectWordCount.java
 
 
@@ -261,16 +278,88 @@ JavaPairInputDStream<String, String> lines = KafkaUtils.createDirectStream(jssc,
 
 ---
 
+## DStream transformation操作
+
+### updateStateByKey 统计每个单词的全局出现次数  UpdateStateByKeyWordCount.java
+
+注: 必须开启checkpoint()
+
+以DStream中的数据进行按key做reduce操作，然后对各个批次的数据进行累加 
+在有新的数据信息进入或更新时，可以让用户保持想要的任何状。使用这个功能需要完成两步： 
+
+```markdown
+1) 定义状态：可以是任意数据类型 
+2) 定义状态更新函数：用一个函数指定如何使用先前的状态，从输入流中的新值更新状态。 
+```
+
+对于有状态操作，要不断的把当前和历史的时间切片的RDD累加计算，随着时间的流失，计算的数据规模会变得越来越大。
 
 
 
+```java
+//1.如果使用 updateStateByKey牌子,必须设置checkpoint目录,开启checkpoint机制
+//这样就把每个key对应的state除了在内存中有,也要checkpoint一份,以便在内存数据丢失时.可以从checkpoint恢复
+jssc.checkpoint("hdfs://sotowang-pc:9000/wordcount_checkpoint");
+```
 
+```java
+//执行wordCoutn操作
+JavaDStream<String> words = lines.flatMap(new FlatMapFunction<String, String>() {
+    @Override
+    public Iterable<String> call(String line) throws Exception {
+        return Arrays.asList(line.split(" "));
+    }
+});
 
+//每个单词映射为(word,1)
+JavaPairDStream<String, Integer> pairs = words.mapToPair(new PairFunction<String, String, Integer>() {
+    @Override
+    public Tuple2<String, Integer> call(String word) throws Exception {
+        return new Tuple2<String, Integer>(word, 1);
+    }
+});
 
+//如何统计每个单词的全局出现次数??
+JavaPairDStream<String, Integer> wordCounts = pairs.updateStateByKey(new Function2<List<Integer>, Optional<Integer>, Optional<Integer>>() {
 
+    //Optional类似于Scala中的样例类,就是Option,它代表了一个值的存在,可存在也可不存在
+    //这两个参数values和state,每次batch计算的时候,都会调用这个函数
+    //第一个参数values,相当于batch中key的新的值,可能有多个,比如一个hello,可能有两个1,(hello,1) (hello,1 ) 那么传入的是(1,1)
+    //第二个参数,就是指这个key之前的状态,state,其中泛型的类型是自己指定的
+    @Override
+    public Optional<Integer> call(List<Integer> values, Optional<Integer> state) throws Exception {
+        //定义一个全局单词计数
+        Integer newValue = 0;
 
+        //判断state是否存在,如果不存在,说明是一个key第一次出现
+        //如果存在,说明key之前已经统计过次数了
+        if (state.isPresent()) {
+            newValue = state.get();
+        }
 
+        //将新出现的值都累加到newValues上去,就是key目前的全局统计次数
+        for (Integer value : values) {
+            newValue += value;
+        }
+        return Optional.of(newValue);
+    }
 
+});
+
+wordCounts.print();
+```
+
+* 创建HDFS中wordcount_checkpoint文件
+
+```markdown
+hadoop fs -mkdir /wordcount_checkpoint
+```
+
+* socket流 
+
+```markdown
+nc -l localhost -p 9999
+```
 
 
 
