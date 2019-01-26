@@ -142,17 +142,69 @@ Time: 1548490585000 ms
 (you,1)
 ```
 
+### 基于Receiver方式实现Kafka数据源 KafkaWordCount.java
 
+这种方式使用Receiver来获取数据,Receiver是使用Kafka的高层次Consumer API来实现的,receiver从Kafka中获取的数据都是存储在Spark Executor的内存中,然后Spark Streaming启动的job会处理
+这些数据
 
+注:
+```markdown
+在默认配置下,这种方式可能因底层的失败而丢失数据,
+如果启用高可靠机制,让数据零丢失,就必须启用Spark Streaming的预定日志机制(WAL),
+该机制会同步地将接收到的Kafka数据写入分布式文件系统(如HDFS)上的预写日志中,所以,即使底层节点出现了失败,也可以使用预写日志中的数据进行恢复
 
+```
 
+* 添加依赖
 
+```java
+<!-- https://mvnrepository.com/artifact/org.apache.spark/spark-streaming-kafka -->
+<dependency>
+  <groupId>org.apache.spark</groupId>
+  <artifactId>spark-streaming-kafka_2.10</artifactId>
+  <version>1.6.0-cdh5.7.0</version>
+</dependency>
+```
 
+* 查找本机内网ip
 
+```bash
+ip address
+```
 
+```java
+Map<String, Integer> topicThreadMap = new HashMap<String, Integer>();
+topicThreadMap.put("WordCount", 1);
 
+//使用KafkaUtils.createStream()方法创建针对Kafka的输入数据源
+//Kafka中返回的是JavaPair形式的,但每一个String为null,一般使用每二个参数
+JavaPairReceiverInputDStream<String, String> lines = KafkaUtils.createStream(
+        jssc,
+        "192.168.12.218:2181,192.168.12.22:21811",
+        "DefaultConsumerGroup",
+        topicThreadMap
+);
+```
 
+* 启动Zookeeper
 
+```markdown
+zookeeper-server-start.sh $KAFKA_HOME/config/zookeeper.properties
+```
+
+* 启动kafka
+
+```markdown
+kafka-server-start.sh  -daemon $KAFKA_HOME/config/server.properties
+```
+
+* 创建topic
+
+```markdown
+kafka-console-producer.sh --broker-list localhost:9092 --wordCount
+```
+
+* 启动程序...
 
 
 
