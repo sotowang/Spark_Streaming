@@ -2,6 +2,7 @@
 
 [北风网 Spark 2.0从入门到精通 (278讲)](https://www.bilibili.com/video/av19995678/?p=101&t=612
 )
+--- 
 
 实时数据源头--> 消息中间件(Kafka)
 
@@ -93,9 +94,53 @@ public class WordCount {
 
 > nc -l localhost -p 9999
 
+---
+## DStream 和 Receiver
 
+注:
 
+```markdown
+1. 使用本地模式,运行程序时,不能使用local或local[1],这样只会给执行输入DStream的executor分配一个线程,Spark Streaming至少需要2个线程,一条用来分配给Receiver接收数据,一条用来处理收到的数据
+因此,必须使用local[n],n>=2
 
+```
+
+## 输入DStream之基础数据源以及基于HDFS的实时wordCount程序
+
+### 基于socket,见上面例子
+
+### HDFS文件  HDFSWordCount.java
+
+其实就是监控HDFS目录,只要其中有新文件出现,就实时处理,相当时处理实时的文件流.
+
+注:
+
+>基于HDFS的数据源是没有Receiver的,不会占用cpu core
+
+```java
+ //使用JavaStreamingContext的fileStream() 方法,创建针对HDFS目录的数据流
+JavaDStream<String> lines = jssc.textFileStream("hdfs://sotowang-pc:9000/wordcount_dir");
+```
+
+* 在HDFS创建wordcount_dir
+
+``` bash
+hadoop fs -mkdir /wordcount_dir
+```
+
+* 将文本传入hdfs
+
+> hadoop fs -put /home/sotowang/user/aur/ide/idea/idea-IU-182.3684.101/workspace/Spark_Streaming/src/resources/hdfswordcount.txt /wordcount_dir/hdfswordcount.txt
+
+结果
+
+```markdown
+Time: 1548490585000 ms
+(hello,3)
+(me,1)
+(world,1)
+(you,1)
+```
 
 
 
