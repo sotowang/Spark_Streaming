@@ -598,10 +598,19 @@ nc -l localhost -p 9999
 
 * 启动程序...
 
+---
 
+## Spark Streaming 与 Spark Core整合  Top3HotProduct.java
 
+案例: 每隔10s统计最近60s的每个种类的每个商品的点击次数,然后统计出每个各类top3的热门商品
 
+注: 
 
+> 1. 开窗函数row_number() 如果使用SqlContext会报错,
+
+解决方法: 使用HiveContext
+
+---
 
 
 
