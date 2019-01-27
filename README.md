@@ -404,16 +404,34 @@ JavaDStream<String> vaildAdsClickLogDStream = userAdsClickLogDStream.transform(n
 nc -l localhost -p 9999
 ```
 
+---
+
+## Spark Streaming 滑动窗口
+
+案例:  热点搜索词滑动统计,每隔10s统计最近60秒钏的搜索词的搜索频次,并打印出排名最靠前的3个搜索词以及出现次数
+
+### 基于滑动窗口的热点搜索词滑动统计  WindowHotWord.java
+
+```java
+//针对(word,1)执行 reduceByKeyAndWindow操作,第二个参数是窗口长度,这里为60s,第三个为窗口间隔,这里为10s
+//每隔10s,将最近60s的数据,作为一个窗口,进行内部RDD聚合,然后统一对一个RDD进行后续计算
+JavaPairDStream<String, Integer> searchWordCountDStream = searchWordPairDStream.reduceByKeyAndWindow(new Function2<Integer, Integer, Integer>() {
+    @Override
+    public Integer call(Integer v1, Integer v2) throws Exception {
+        return v1 + v2;
+    }
+}, Durations.seconds(60),Durations.seconds(10));
+```
 
 
 
+* 启动socket流
 
+```markdown
+nc -l localhost -p 9999
+```
 
-
-
-
-
-
+* 启动程序...
 
 
 

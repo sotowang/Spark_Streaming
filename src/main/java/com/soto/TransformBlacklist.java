@@ -22,7 +22,7 @@ import java.util.List;
 public class TransformBlacklist {
     public static void main(String[] args) {
         SparkConf sparkConf = new SparkConf()
-                .setAppName("UpdateStateByKeyWordCount")
+                .setAppName("TransformBlacklist")
                 .setMaster("local[2]");
         JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.seconds(5));
 
