@@ -612,6 +612,336 @@ nc -l localhost -p 9999
 
 ---
 
+## Spark Streaming缓存与持久化机制
+
+与RDD类似，Spark Streaming也可以让开发人员手动控制，将数据流中的数据持久化到内存中。
+对DStream调用persist()方法，就可以让Spark Streaming自动将该数据流中的所有产生的RDD，都持久化到内存中。
+如果要对一个DStream多次执行操作，那么，对DStream持久化是非常有用的。因为多次操作，可以共享使用内存中的一份缓存数据。
+
+对于基于窗口的操作，比如reduceByWindow、reduceByKeyAndWindow，以及基于状态的操作，比如updateStateByKey，默认就隐式开启了持久化机制。
+即Spark Streaming默认就会将上述操作产生的Dstream中的数据，缓存到内存中，不需要开发人员手动调用persist()方法。
+
+对于通过网络接收数据的输入流，比如socket、Kafka、Flume等，默认的持久化级别，是将数据复制一份，以便于容错。相当于是，用的是类似MEMORY_ONLY_SER_2。
+
+与RDD不同的是，默认的持久化级别，统一都是要序列化的。
+
+
+## Spark Streaming Checkpoint机制
+
+[Spark Streaming缓存、Checkpoint机制](https://blog.csdn.net/u010521842/article/details/78074354)
+
+Spark Streaming应用程序如果不手动停止，则将一直运行下去，
+在实际中应用程序一般是24小时*7天不间断运行的，因此Streaming必须对诸如系统错误，JVM出错等与程序逻辑无关的错误(failures)具体很强的弹性，
+具备一定的非应用程序出错的容错性。Spark Streaming的Checkpoint机制便是为此设计的，它将足够多的信息checkpoint到某些具备容错性的存储系统如hdfs上，
+以便出错时能够迅速恢复。有两种数据可以checkpoint：
+
+Metadata checkpointing
+
+```markdown
+
+将流式计算的信息保存到具备容错性的存储上比如HDFS，Metadata Checkpointing适用于当streaming应用程序Driver所在的节点出错时能够恢复，
+
+元数据包括： 
+Configuration(配置信息) : 创建streaming应用程序的配置信息 
+Dstream operations : 在streaming应用程序中定义的DStreaming操作 
+Incomplete batches : 在队列中没有处理完的作业
+```
+
+Data checkpointing
+
+```markdown
+
+将生成的RDD保存到外部可靠的存储当中，对于一些数据跨度为多个batch的有状态transformation操作来说，checkpoint非常有必要，
+因为在这些transformation操作生成的RDD对前一RDD有依赖，随着时间的增加，依赖链可能非常长，checkpoint机制能够切断依赖链，将中间的RDD周期性地checkpoint到可靠存储当中，
+从而在出错时可以直接从checkpoint点恢复。 
+具体来说，metadata checkpointing主要还是从driver失败中恢复，而Data Checkpoint用于对有状态的transformation操作进行checkpointing
+```
+
+### 什么时候需要启用checkpoint？
+
+什么时候该启用checkpoint？满足一下任意条件： 
+
+```markdown
+
+- 使用了stateful转换，如果application中使用了updateStateByKey或者reduceByKeyAndWindow等stateful操作，必须提供checkpoint目录来允许定时的RDD checkpoint 
+
+- 希望能从意外中恢复driver
+```
+
+如果streaming app没有stateful操作，也允许Driver挂掉之后再次重启 的进度丢失，就没有启动checkpoint的必要了。
+
+### 如何使用checkpoint？
+启用checkpoint，需要设置一个支持容错的、可靠的文件系统(如hdfs、s3等)目录来保存checkpoint数据。
+通过调用streamingContext.checkpoint(checkpointDirectory)来完成。另外 ，如果你 想让你的application能从driver失败中恢复，你的application要满足 : 
+
+```markdown
+- 若application为首次重启，将创建一个新的StreamContext实例 
+- 如果application是从失败中重启，将会从checkpoint目录导入checkpoint数据来重新创建StreamingContext实例。
+
+```
+
+## Spark Streaming 部署、升级和监控应用程序
+
+[Spark Streaming 部署、升级和监控应用程序](http://www.manongjc.com/article/47473.html)
+
+### 部署应用程序
+
+* 有一个集群资源管理器，比如standalone模式下的Spark集群，Yarn模式下的Yarn集群等。
+
+* 打包应用程序为一个jar包，课程中一直都有演示。
+
+* 为executor配置充足的内存，因为Receiver接受到的数据，是要存储在Executor的内存中的，所以Executor必须配置足够的内存来保存接受到的数据。
+要注意的是，如果你要执行窗口长度为10分钟的窗口操作，那么Executor的内存资源就必须足够保存10分钟内的数据，因此内存的资源要求是取决于你执行的操作的。
+
+* 配置checkpoint，如果你的应用程序要求checkpoint操作，那么就必须配置一个Hadoop兼容的文件系统（比如HDFS）的目录作为checkpoint目录.
+
+* 配置driver的自动恢复，如果要让driver能够在失败时自动恢复，之前已经讲过，一方面，要重写driver程序，一方面，要在spark-submit中添加参数。
+
+
+### 部署应用程序：启用预写日志机制
+* 预写日志机制，简写为WAL，全称为Write Ahead Log。从Spark 1.2版本开始，就引入了基于容错的文件系统的WAL机制。
+如果启用该机制，Receiver接收到的所有数据都会被写入配置的checkpoint目录中的预写日志。
+这种机制可以让driver在恢复的时候，避免数据丢失，并且可以确保整个实时计算过程中，零数据丢失。
+
+* 要配置该机制，首先要调用StreamingContext的checkpoint()方法设置一个checkpoint目录。然后需要将spark.streaming.receiver.writeAheadLog.enable参数设置为true。
+
+* 然而，这种极强的可靠性机制，会导致Receiver的吞吐量大幅度下降，因为单位时间内，有相当一部分时间需要将数据写入预写日志。
+如果又希望开启预写日志机制，确保数据零损失，又不希望影响系统的吞吐量，那么可以创建多个输入DStream，启动多个Rceiver。
+
+* 此外，在启用了预写日志机制之后，推荐将复制持久化机制禁用掉，因为所有数据已经保存在容错的文件系统中了，不需要在用复制机制进行持久化，保存一份副本了。
+只要将输入DStream的持久化机制设置一下即可，persist(StorageLevel.MEMORY_AND_DISK_SER)。（之前讲过，默认是基于复制的持久化策略，_2后缀）
+
+
+### 部署应用程序：设置Receiver接收速度
+
+* 如果集群资源有限，并没有大到，足以让应用程序一接收到数据就立即处理它，Receiver可以被设置一个最大接收限速，以每秒接收多少条单位来限速。
+
+* spark.streaming.receiver.maxRate和spark.streaming.kafka.maxRatePerPartition参数可以用来设置，前者设置普通Receiver，后者是Kafka Direct方式。
+
+* Spark 1.5中，对于Kafka Direct方式，引入了backpressure机制，从而不需要设置Receiver的限速，Spark可以自动估计Receiver最合理的接收速度，并根据情况动态调整。
+只要将spark.streaming.backpressure.enabled设置为true即可。
+
+* 在企业实际应用场景中，通常是推荐用Kafka Direct方式的，特别是现在随着Spark版本的提升，越来越完善这个Kafka Direct机制。
+
+```markdown
+优点：
+1、不用receiver，不会独占集群的一个cpu core；
+2、有backpressure自动调节接收速率的机制；
+3、…。
+
+```
+
+### 升级应用程序
+
+*由于Spark Streaming应用程序都是7 * 24小时运行的。因此如果需要对正在运行的应用程序，进行代码的升级，那么有两种方式可以实现：
+
+```markdown
+ 1. 升级后的Spark应用程序直接启动，先与旧的Spark应用程序并行执行。当确保新的应用程序启动没问题之后，就可以将旧的应用程序给停掉。
+ 但是要注意的是，这种方式只适用于，能够允许多个客户端读取各自独立的数据，也就是读取相同的数据。
+
+ 2. 小心地关闭已经在运行的应用程序，使用StreamingContext的stop()方法，可以确保接收到的数据都处理完之后，才停止。
+ 然后将升级后的程序部署上去，启动。这样，就可以确保中间没有数据丢失和未处理。因为新的应用程序会从老的应用程序未消费到的地方，继续消费。
+ 但是注意，这种方式必须是支持数据缓存的数据源才可以，比如Kafka、Flume等。如果数据源不支持数据缓存，那么会导致数据丢失。
+
+```
+
+*注意：配置了driver自动恢复机制时，如果想要根据旧的应用程序的checkpoint信息，启动新的应用程序，是不可行的。
+需要让新的应用程序针对新的checkpoint目录启动，或者删除之前的checkpoint目录。
+
+
+### 监控应用程序
+
+* 当Spark Streaming应用启动时，Spark Web UI会显示一个独立的streaming tab，会显示Receiver的信息，比如是否活跃，接收到了多少数据，是否有异常等；
+还会显示完成的batch的信息，batch的处理时间、队列延迟等。这些信息可以用于监控spark streaming应用的进度。
+
+* Spark UI中，以下两个统计指标格外重要：
+
+```markdown
+1. 处理时间——每个batch的数据的处理耗时
+2. 调度延迟——一个batch在队列中阻塞住，等待上一个batch完成处理的时间
+
+```
+
+* 如果batch的处理时间，比batch的间隔要长的话，而且调度延迟时间持续增长，应用程序不足以使用当前设定的速率来处理接收到的数据，此时，可以考虑增加batch的间隔时间。
+
+---
+
+## Spark Streaming容错机制以及事务语义详解
+
+[Spark Streaming容错机制以及事务语义详解](https://blog.csdn.net/love__live1/article/details/86575828)
+
+### 容错机制的背景
+
+* 要理解Spark Streaming提供的容错机制，先回忆一下Spark RDD的基础容错语义：
+
+>RDD，Ressilient Distributed Dataset，是不可变的、确定的、可重新计算的、分布式的数据集。每个RDD都会记住确定好的计算操作的血缘关系，
+（val lines = sc.textFile(hdfs file);          
+val words = lines.flatMap();        
+val pairs = words.map();    
+val wordCounts = pairs.reduceByKey()）        
+这些操作应用在一个容错的数据集上来创建RDD。
+如果因为某个Worker节点的失败（挂掉、进程终止、进程内部报错），导致RDD的某个partition数据丢失了，那么那个partition可以通过对原始的容错数据集应用操作血缘，来重新计算出来。
+所有的RDD transformation操作都是确定的，最后一个被转换出来的RDD的数据，一定是不会因为Spark集群的失败而丢失的。
+
+* Spark操作的通常是容错文件系统中的数据，比如HDFS。因此，所有通过容错数据生成的RDD也是容错的。
+然而，对于Spark Streaming来说，这却行不通，因为在大多数情况下，数据都是通过网络接收的（除了使用fileStream数据源）。
+要让Spark Streaming程序中，所有生成的RDD，都达到与普通Spark程序的RDD，相同的容错性，接收到的数据必须被复制到多个Worker节点上的Executor内存中，默认的复制因子是2。
+
+* 基于上述理论，在出现失败的事件时，有两种数据需要被恢复：
+
+```markdown
+1. 数据接收到了，并且已经复制过——这种数据在一个Worker节点挂掉时，是可以继续存活的，因为在其他Worker节点上，还有它的一份副本。
+2. 数据接收到了，但是正在缓存中，等待复制的——因为还没有复制该数据，因此恢复它的唯一办法就是重新从数据源获取一份。
+
+```
+此外，还有两种失败是我们需要考虑的：
+
+```markdown
+1. Worker节点的失败
+——任何一个运行了Executor的Worker节点的挂掉，都会导致该节点上所有在内存中的数据都丢失。如果有Receiver运行在该Worker节点上的Executor中，那么缓存的，待复制的数据，都会丢失。
+
+2. Driver节点的失败
+——如果运行Spark Streaming应用程序的Driver节点失败了，那么显然SparkContext会丢失，那么该Application的所有Executor的数据都会丢失。
+```
+
+### Spark Streaming容错语义的定义
+
+* 流式计算系统的容错语义，通常是以一条记录能够被处理多少次来衡量的。
+
+有三种类型的语义可以提供：
+
+```markdown
+最多一次：每条记录可能会被处理一次，或者根本就不会被处理。可能有数据丢失。
+
+至少一次：每条记录会被处理一次或多次，这种语义比最多一次要更强，因为它确保零数据丢失。但是可能会导致记录被重复处理几次。
+
+一次且仅一次：每条记录只会被处理一次——没有数据会丢失，并且没有数据会处理多次。这是最强的一种容错语义。
+
+```
+
+### Spark Streaming的基础容错语义
+
+* 在Spark Streaming中，处理数据都有三个步骤：
+
+```markdown
+接收数据：使用Receiver或其他方式接收数据。
+计算数据：使用DStream的transformation操作对数据进行计算和处理。
+推送数据：最后计算出来的数据会被推送到外部系统，比如文件系统、数据库等。
+```
+
+* 如果应用程序要求必须有一次且仅一次的语义，那么上述三个步骤都必须提供一次且仅一次的语义。每条数据都得保证，只能接收一次、只能计算一次、只能推送一次。
+
+Spark Streaming中实现这些语义的步骤如下：
+
+```markdown
+接收数据：不同的数据源提供不同的语义保障。
+
+计算数据：所有接收到的数据一定只会被计算一次，这是基于RDD的基础语义所保障的。即使有失败，只要接收到的数据还是可访问的，最后一个计算出来的数据一定是相同的。
+
+推送数据：output操作默认能确保至少一次的语义，因为它依赖于output操作的类型，以及底层系统的语义支持（比如是否有事务支持等），但是用户可以实现它们自己的事务机制来确保一次且仅一次的语义。
+
+
+```
+
+### 接收数据的容错语义
+
+* 基于文件的数据源
+ 
+ 如果所有的输入数据都在一个容错的文件系统中，比如HDFS，Spark Streaming一定可以从失败进行恢复，并且处理所有数据。这就提供了一次且仅一次的语义，意味着所有的数据只会处理一次。
+ 
+* 基于Receiver的数据源
+
+ 对于基于Receiver的数据源，容错语义依赖于失败的场景和Receiver类型。
+ 
+ ```markdown
+
+ 可靠的Receiver：
+    这种Receiver会在接收到了数据，并且将数据复制之后，对数据源执行确认操作。
+    如果Receiver在数据接收和复制完成之前，就失败了，那么数据源对于缓存的数据会接收不到确认，此时，当Receiver重启之后，数据源会重新发送数据，没有数据会丢失。
+
+ 不可靠的Receiver：
+    这种Receiver不会发送确认操作，因此当Worker或者Driver节点失败的时候，可能会导致数据丢失。
+ 
+```
+
+* 不同的Receiver，提供了不同的语义。
+
+如果Worker节点失败了，那么使用的是可靠的Receiver的话，没有数据会丢失。
+
+使用的是不可靠的Receiver的话，接收到，但是还没复制的数据，可能会丢失。
+
+如果Driver节点失败的话，所有过去接收到的，和复制过缓存在内存中的数据，全部会丢失。
+ 
+* 要避免这种过去接收的所有数据都丢失的问题，Spark从1.2版本开始，引入了预写日志机制，可以将Receiver接收到的数据保存到容错存储中。
+
+如果使用可靠的Receiver，并且还开启了预写日志机制，那么可以保证数据零丢失。这种情况下，会提供至少一次的保障。（Kafka是可以实现可靠Receiver的）
+
+* 从Spark 1.3版本开始，引入了新的Kafka Direct API，可以保证，所有从Kafka接收到的数据，都是一次且仅一次。
+基于该语义保障，如果自己再实现一次且仅一次语义的output操作，那么就可以获得整个Spark Streaming应用程序的一次且仅一次的语义。
+
+
+### 输出数据的容错语义
+
+* output操作，比如foreachRDD，可以提供至少一次的语义。
+那意味着，当Worker节点失败时，转换后的数据可能会被写入外部系统一次或多次。对于写入文件系统来说，这还是可以接收的，因为会覆盖数据。但是要真正获得一次且仅一次的语义，有两个方法：
+
+```markdown
+幂等更新：
+    多次写操作，都是写相同的数据，例如saveAs系列方法，总是写入相同的数据。
+事务更新：
+    所有的操作都应该做成事务的，从而让写入操作执行一次且仅一次。
+    给每个batch的数据都赋予一个唯一的标识，然后更新的时候判定，如果数据库中还没有该唯一标识，那么就更新，如果有唯一标识，那么就不更新。
+```
+
+```markdown
+dstream.foreachRDD { (rdd, time) =>
+  rdd.foreachPartition { partitionIterator =>
+    val partitionId = TaskContext.get.partitionId()
+    val uniqueId = generateUniqueId(time.milliseconds, partitionId)
+    // partitionId和foreachRDD传入的时间，可以构成一个唯一的标识
+  }
+}
+
+```
+
+
+### Storm的容错语义
+
+* Storm首先，它可以实现消息的高可靠性，就是说，它有一个机制，叫做Acker机制，可以保证，如果消息处理失败，那么就重新发送。
+保证了，至少一次的容错语义。但是光靠这个，还是不行，数据可能会重复。
+
+* Storm提供了非常非常完善的事务机制，可以实现一次且仅一次的事务机制。
+
+事务Topology、透明的事务Topology、非透明的事务Topology，可以应用各种各样的情况。
+
+对实现一次且仅一次的这种语义的支持，做的非常非常好。用事务机制，可以获得它内部提供的一个唯一的id，然后基于这个id，就可以实现，output操作，
+输出，推送数据的时候，先判断，该数据是否更新过，如果没有的话，就更新；如果更新过，就不要重复更新了。
+
+* 所以，至少，在容错 / 事务机制方面，我觉得Spark Streaming还有很大的空间可以发展。特别是对于output操作的一次且仅一次的语义支持！
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
