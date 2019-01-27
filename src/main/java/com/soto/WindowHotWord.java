@@ -21,7 +21,7 @@ import java.util.List;
 public class WindowHotWord {
     public static void main(String[] args) {
         SparkConf sparkConf = new SparkConf()
-                .setAppName("TransformBlacklist")
+                .setAppName("WindowHotWord")
                 .setMaster("local[2]");
         JavaStreamingContext jssc = new JavaStreamingContext(sparkConf, Durations.seconds(5));
 

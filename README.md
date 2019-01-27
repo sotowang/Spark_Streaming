@@ -278,7 +278,7 @@ JavaPairInputDStream<String, String> lines = KafkaUtils.createDirectStream(jssc,
 
 ---
 
-## DStream transformation操作
+## DStream transform操作
 
 ### updateStateByKey 统计每个单词的全局出现次数  UpdateStateByKeyWordCount.java
 
@@ -432,6 +432,178 @@ nc -l localhost -p 9999
 ```
 
 * 启动程序...
+
+
+---
+## Spark Streaming中的output操作
+
+DStream中的所有计算,都是由output操作触发的,比如print(),如果没有任何的output操作,就不会执行定义的计算逻辑
+
+此外,即使使用了foreachRDD output操作,也必须在里面对RDD执行action操作,才能触发对每一个batch的计算逻辑.否则,光有foreachRDD output操作,在里面没有对RDD
+执行action操作,也不会触发任何逻辑.
+
+### foreachRDD
+
+通常在foreachRDD中都会创建一个Connection,比如JDBC Connection,然后通过Connection将数据写入外部存储
+
+误区:
+
+> 1. 在RDD的foreach操作外部,创建Connection
+
+这种方式是错误的,因为它会导致Connection对象被序列化后传输到每个task中,而这种Connection对象,实际上是不支持序列化的,也就无法被传输
+
+```scala
+dstream.foreachRDD{rdd =>
+    val connection = createNewConncetion()
+    rdd.foreach{
+        record => connection.send(record)
+    }
+}
+```
+
+> 2. 在RDD的foreach操作内部创建Connection
+
+这种方式是可以的,但效率低下,因为它会导致对于RDD中的每一条数据都创建一个Connection对象,而通常来说,Connection的创建,很消耗性能
+
+```scala
+dstream.foreachRDD{rdd =>
+    rdd.foreach{
+        record => 
+            val connection = createNewConncetion()
+            connection.send(record)
+            connection.close()
+    }
+}
+```
+
+合理的方式:
+
+> 1. 使用RDD的foreachPartition操作,并且在该操作内部创建Connection对象,这样就相当于为RDD的每个Partition创建一个Connection对象,节省资源
+
+```scala
+dstream.foreachRDD{rdd =>
+    rdd.foreachPartition{
+        partitionOfRecords => 
+            val connection = createNewConncetion()
+            partitionOfRecords.foreach(record => connection.send(record))
+            connection.close()
+    }
+}
+```
+
+> 2. 自己手动封装一个静态连接池,使用RDD的foreachPartition操作,并且在该操作内部,从静态连接池中,通过静态方法,获取到一个连接,使用之后再还回去.
+这样的话,甚至在多个RDD的partition之间,也可以复用连接了,而且可以让连接池采取懒创建的策略,并且空闲一段时间后将其释放掉
+
+```scala
+dstream.foreachRDD{rdd =>
+    rdd.foreachPartition{
+        partitionOfRecords => 
+            val connection = ConnectionPool.getConnection()
+            partitionOfRecords.foreach(record => connection.send(record))
+            ConnectionPool.returnConnection(Connection)
+    }
+}
+```
+
+#### foreachRDD 实战  PersistWordCount.java
+
+案例: 改写UpdateStateByKeyWordCount,将每次统计出来的全局的单词计数,写到MySQL数据库中
+
+* 建表
+
+```mysql
+create table wordcount(
+  id integer auto_increment primary key,
+  updated_time timestamp not null default current_timestamp on update current_timestamp,
+  word varchar(255),
+  count integer
+);
+```
+
+[MySQL CURRENT_TIMESTAMP 和 ON UPDATE CURRENT_TIMESTAMP 详解](https://blog.csdn.net/chenshun123/article/details/79677433)
+
+```markdown
+1> CURRENT_TIMESTAMP : 当要向数据库执行 insert操作时，如果有个 timestamp字段属性设为 CURRENT_TIMESTAMP，则无论这个字段有没有set值都插入当前系统时间
+
+2> ON UPDATE CURRENT_TIMESTAMP : 使用 ON UPDATE CURRENT_TIMESTAMP 放在 TIMESTAMP 类型的字段后面，在数据发生更新时该字段将自动更新时间
+```
+
+* 连接池 ConnectionPool.java
+
+```java
+/**
+     * 获取连接,多线程访问并发控制
+     * @return
+     */
+    public synchronized static Connection getConnection() {
+        try{
+            if (connectionQueue == null) {
+                connectionQueue = new LinkedList<Connection>();
+                for (int i = 0; i < 10; i++) {
+                    Connection conn = DriverManager.getConnection("jdbc:mysql://sotowang-pc:3306/testdb",
+                            "root",
+                            "123456");
+                    connectionQueue.push(conn);
+                }
+            }
+
+        }catch (Exception e){
+            e.printStackTrace();
+        }
+
+        //poll :移除并返问队列头部的元素    如果队列为空，则返回null
+        return connectionQueue.poll();
+    }
+```
+
+* 写入Mysql
+
+```java
+//每次得到所有单词有统计次数以后,将其写入mysql存储进行拷入化,以便于后序的J2EE应用程序进行显示
+wordCounts.foreachRDD(new Function<JavaPairRDD<String, Integer>, Void>() {
+    @Override
+    public Void call(JavaPairRDD<String, Integer> wordCountsRDD) throws Exception {
+        wordCountsRDD.foreachPartition(new VoidFunction<Iterator<Tuple2<String, Integer>>>() {
+            @Override
+            public void call(Iterator<Tuple2<String, Integer>> wordCounts) throws Exception {
+                //给每个partition获取一个连接
+                Connection conn = ConnectionPool.getConnection();
+
+                //遍历partition中的数据,使用1个连接插入数据库
+                Tuple2<String, Integer> wordCount = null;
+                while (wordCounts.hasNext()) {
+                    wordCount = wordCounts.next();
+
+                    String sql = "insert into wordcount(word,count) " +
+                            " values( '" + wordCount._1 + "'," + wordCount._2 + ") ";
+
+                    Statement stmt = conn.createStatement();
+                    stmt.executeUpdate(sql);
+                }
+
+                //用完后还回去
+                ConnectionPool.returnConnection(conn);
+            }
+        });
+        return null;
+    }
+});
+```
+
+* 启动socket流
+
+```markdown
+nc -l localhost -p 9999
+```
+
+* 启动程序...
+
+
+
+
+
+
+
 
 
 
